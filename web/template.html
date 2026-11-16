@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Minesweeper solver</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0a0b0b;
+    --panel: #0e1010;
+    --cell: #161a19;
+    --open: #0b0c0c;
+    --grid: #1a1e1d;
+    --line: #2a302e;
+    --dim: #6b7572;
+    --text: #c8d0cd;
+    --bright: #f2f5f4;
+    --accent: #4fe0a8;
+    --red: #ff3b3b;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); }
+  body {
+    padding: 12px;
+    color: var(--text);
+    font: 11px/1.5 var(--mono);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  .shell { max-width: 1500px; margin: 0 auto; display: grid; gap: 8px; }
+
+  /* header */
+  .top {
+    display: flex; flex-wrap: wrap; gap: 6px 24px; align-items: center;
+    border: 1px solid var(--line); background: var(--panel); padding: 8px 12px;
+  }
+  .top h1 { margin: 0; font-size: 13px; font-weight: 600; color: var(--bright); letter-spacing: 0.14em; }
+  .top .spacer { flex: 1; }
+  .kv { color: var(--dim); white-space: nowrap; }
+  .kv b { color: var(--text); font-weight: 500; margin-left: 6px; }
+  .dot { display: inline-block; width: 6px; height: 6px; background: var(--accent); margin-right: 6px; animation: blink 1.6s steps(2) infinite; }
+  @keyframes blink { 50% { opacity: 0.25; } }
+  @media (prefers-reduced-motion: reduce) { .dot { animation: none; } }
+
+  /* layout */
+  .layout { display: grid; grid-template-columns: minmax(0, 1.75fr) minmax(300px, 1fr); gap: 8px; align-items: start; }
+  .col { display: grid; gap: 8px; min-width: 0; }
+  @media (max-width: 980px) { .layout { grid-template-columns: minmax(0, 1fr); } }
+
+  .panel { border: 1px solid var(--line); background: var(--panel); min-width: 0; }
+  .panel > header {
+    display: flex; justify-content: space-between; gap: 8px;
+    padding: 5px 10px; border-bottom: 1px solid var(--line);
+    color: var(--dim); font-size: 10px;
+  }
+  .panel > header span:first-child { color: var(--text); }
+  .panel > .body { padding: 10px; }
+  canvas { display: block; width: 100%; height: 112px; }
+
+  /* field */
+  #banner {
+    font-size: clamp(12px, 1.7vw, 19px); letter-spacing: 0.2em; color: var(--accent);
+    padding: 2px 0 10px; min-height: 2.2em;
+  }
+  #banner[data-state="lost"] { color: var(--red); }
+  #banner[data-state="guess"] { color: var(--bright); }
+  /* one to sixteen fields side by side */
+  #fields { display: grid; gap: 8px; grid-template-columns: repeat(var(--fcols, 1), minmax(0, 1fr)); }
+  #fields[data-n="2"], #fields[data-n="4"] { --fcols: 2; }
+  #fields[data-n="8"], #fields[data-n="16"] { --fcols: 4; }
+  @media (max-width: 760px) { #fields[data-n="8"], #fields[data-n="16"] { --fcols: 2; } }
+  .fieldbox { min-width: 0; }
+  #fields:not([data-n="1"]) .fieldbox { border: 1px solid var(--line); padding: 0 6px 6px; }
+  #fields:not([data-n="1"]) .fieldbox.focus { border-color: var(--accent); }
+  .caption {
+    display: none; width: 100%; justify-content: space-between; gap: 8px;
+    font: inherit; font-size: 10px; text-transform: inherit; letter-spacing: inherit;
+    color: var(--dim); background: none; border: 0; padding: 4px 0; cursor: pointer; white-space: nowrap; overflow: hidden;
+  }
+  #fields:not([data-n="1"]) .caption { display: flex; }
+  .caption span:first-child { color: var(--text); }
+  .fieldbox[data-state="won"] .caption span:last-child { color: var(--accent); }
+  .fieldbox[data-state="lost"] .caption span:last-child { color: var(--red); }
+  .layout[data-wide] { grid-template-columns: minmax(0, 1fr); }
+  .layout[data-wide] > .col:last-child { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); align-items: start; }
+  .board-wrap { container-type: inline-size; }
+  .board {
+    display: grid; grid-template-columns: repeat(var(--cols), 1fr); gap: 1px;
+    width: min(100%, calc(var(--cols) * 28px)); margin: 0 auto;
+    background: var(--line); border: 1px solid var(--line);
+    user-select: none;
+  }
+  .board button {
+    aspect-ratio: 1; min-width: 0; padding: 0; border: 0; border-radius: 0;
+    background: var(--cell); color: var(--text);
+    font: 600 min(14px, calc(100cqw / var(--cols) * 0.55)) / 1 var(--mono);
+    overflow: hidden;
+    cursor: crosshair;
+  }
+  .board button:disabled { cursor: default; }
+  .board button:not(:disabled):hover { outline: 1px solid var(--bright); outline-offset: -1px; }
+  .board .open { background: var(--open); }
+  .board .risk { background-image: linear-gradient(rgba(255, 59, 59, var(--risk)), rgba(255, 59, 59, var(--risk))); }
+  .board .safe { background: rgba(79, 224, 168, 0.6); }
+  .board .flag { background: var(--red); color: #1a0606; }
+  .board .mine { color: var(--red); }
+  .board .boom { background: var(--red); color: #fff; }
+  .board .guess { outline: 2px solid var(--bright); outline-offset: -2px; }
+  .n1 { color: var(--accent) !important; } .n2 { color: #9af0cf !important; }
+  .n3, .n4, .n5, .n6, .n7, .n8 { color: var(--bright) !important; }
+  .board .safe.odds { color: #06130e; }
+  .board .odds { font-weight: 500; font-size: min(10px, calc(100cqw / var(--cols) * 0.4)); color: var(--bright); }
+  #readout { margin: 8px 0 0; color: var(--dim); min-height: 1.5em; }
+
+  .controls { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 8px 10px; border-top: 1px solid var(--line); }
+  .controls button, .controls select {
+    font: inherit; text-transform: inherit; letter-spacing: inherit;
+    color: var(--text); background: transparent; border: 1px solid var(--line); border-radius: 0;
+    padding: 5px 12px; cursor: pointer;
+  }
+  .controls button:hover, .controls select:hover { border-color: var(--dim); color: var(--bright); }
+  .controls button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #06130e; font-weight: 600; }
+  .controls #odds[aria-pressed="true"] { background: transparent; color: var(--accent); font-weight: 500; }
+  .controls button:disabled { color: var(--dim); cursor: wait; }
+  .controls select option { background: var(--panel); }
+  .controls label { display: flex; align-items: center; gap: 8px; color: var(--dim); margin-left: auto; }
+  .controls input[type="range"] { accent-color: var(--accent); width: 110px; }
+
+  /* number tiles */
+  .tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); }
+  .tile { background: var(--panel); padding: 8px 10px; }
+  .tile span { display: block; color: var(--dim); font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tile b { display: block; color: var(--bright); font-size: clamp(13px, 1.3vw, 17px); overflow: hidden; text-overflow: ellipsis; font-weight: 500; letter-spacing: 0.02em; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .tile.hero b { color: var(--accent); }
+
+  @media (max-width: 620px) { .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  .charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; }
+  .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+  /* settings */
+  .settings { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 1px; border-top: 1px solid var(--line); overflow: hidden; }
+  .group { background: var(--panel); padding: 10px 12px 12px; min-width: 0; box-shadow: 0 0 0 1px var(--line); }
+  .group h3 { margin: 0 0 8px; font-size: 10px; font-weight: 500; color: var(--dim); letter-spacing: 0.1em; }
+  .group.wide { grid-column: 1 / -1; }
+  .presets { display: flex; flex-wrap: wrap; gap: 6px; }
+  .presets button, #reset {
+    font: inherit; text-transform: inherit; letter-spacing: inherit; color: var(--text);
+    background: transparent; border: 1px solid var(--line); border-radius: 0; padding: 5px 10px; cursor: pointer;
+  }
+  .presets button:hover, #reset:hover { border-color: var(--dim); color: var(--bright); }
+  .presets button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+  .presets button.danger[aria-pressed="true"] { border-color: var(--red); color: var(--red); }
+  .field { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 4px 0; color: var(--text); }
+  .field + .field { border-top: 1px solid var(--grid); }
+  .field small { display: block; font-size: 9px; color: var(--dim); letter-spacing: 0.04em; }
+  .field select {
+    font: inherit; text-transform: inherit; letter-spacing: inherit; color: var(--text);
+    background: var(--panel); border: 1px solid var(--line); border-radius: 0; padding: 3px 6px; max-width: 55%;
+  }
+  .field input[type="checkbox"] {
+    appearance: none; width: 28px; height: 14px; margin: 0; flex: none; cursor: pointer;
+    border: 1px solid var(--dim); background: transparent; position: relative;
+  }
+  .field input[type="checkbox"]::after { content: ""; position: absolute; top: 2px; left: 2px; width: 8px; height: 8px; background: var(--dim); }
+  .field input[type="checkbox"]:checked { border-color: var(--accent); }
+  .field input[type="checkbox"]:checked::after { left: 16px; background: var(--accent); }
+  .field input[type="checkbox"]:focus-visible, .field select:focus-visible, .slider input:focus-visible { outline: 1px solid var(--bright); outline-offset: 2px; }
+  .slider { padding: 4px 0 6px; }
+  .slider div { display: flex; justify-content: space-between; color: var(--text); }
+  .slider b { color: var(--bright); font-weight: 500; font-variant-numeric: tabular-nums; }
+  .slider input { width: 100%; margin: 4px 0 0; accent-color: var(--accent); }
+  .window { position: relative; height: 10px; margin-top: 8px; border: 1px solid var(--line); background: repeating-linear-gradient(90deg, transparent 0 calc(10% - 1px), var(--line) calc(10% - 1px) 10%); }
+  #p-window { position: absolute; top: 0; bottom: 0; background: var(--accent); opacity: 0.75; }
+  .scale { display: flex; justify-content: space-between; color: var(--dim); font-size: 9px; margin-top: 3px; }
+  #p-summary { margin: 0; color: var(--text); line-height: 1.7; }
+
+  .rows { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; }
+  .rows div { display: flex; justify-content: space-between; gap: 8px; padding: 3px 0; border-bottom: 1px solid var(--grid); color: var(--dim); }
+  .rows b { color: var(--text); font-weight: 500; font-variant-numeric: tabular-nums; }
+  @media (max-width: 420px) { .rows { grid-template-columns: 1fr; } }
+
+  .key { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 8px; color: var(--dim); font-size: 10px; }
+  .key i { display: inline-block; width: 8px; height: 8px; margin-right: 5px; vertical-align: -1px; }
+
+  #log { height: 150px; overflow-y: auto; padding: 8px 10px; color: var(--dim); font-size: 10px; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+  #log div { white-space: nowrap; }
+  #log .good { color: var(--accent); }
+  #log .bad { color: var(--red); }
+  #log .warn { color: var(--text); }
+</style>
+</head>
+<body>
+<div class="shell">
+  <div class="top">
+    <h1>MSW-SOLVER / PROBABILITY ENGINE</h1>
+    <span class="kv"><i class="dot"></i>ONLINE</span>
+    <span class="spacer"></span>
+    <span class="kv">MODE<b id="mode">AUTONOMOUS</b></span>
+    <span class="kv">SEED<b id="seed">--</b></span>
+    <span class="kv">UPTIME<b id="clock">T+00:00</b></span>
+  </div>
+
+  <div class="layout" id="layout">
+    <div class="col">
+      <section class="panel">
+        <header><span>01 / FIELD</span><span id="focus-name">LIVE</span></header>
+        <div class="body">
+          <div id="banner" role="status"></div>
+          <div id="fields" data-n="1"></div>
+          <p id="readout">NUMBERS ON HIDDEN CELLS ARE % CHANCE OF A MINE / HOVER FOR EXACT ODDS / CLICK TO PLAY</p>
+          <div class="key">
+            <span><i style="background: rgba(79,224,168,.6)"></i>CERTAINLY SAFE</span>
+            <span><i style="background: rgba(255,59,59,.35)"></i>RISK (REDDER IS WORSE)</span>
+            <span><i style="background: var(--red)"></i>CERTAIN MINE</span>
+            <span><i style="outline: 2px solid var(--bright); outline-offset: -2px"></i>BEST GUESS</span>
+          </div>
+        </div>
+        <div class="controls">
+          <select id="level" aria-label="Difficulty">
+            <option value="beginner">BEGINNER 9x9</option>
+            <option value="intermediate">INTERMEDIATE 16x16</option>
+            <option value="expert" selected>EXPERT 30x16</option>
+          </select>
+          <select id="count" aria-label="Number of fields running at once">
+            <option value="1" selected>1 FIELD</option>
+            <option value="2">2 FIELDS</option>
+            <option value="4">4 FIELDS</option>
+            <option value="8">8 FIELDS</option>
+            <option value="16">16 FIELDS</option>
+          </select>
+          <button id="auto" type="button" aria-pressed="true">PAUSE</button>
+          <button id="step" type="button">STEP</button>
+          <button id="new" type="button">NEW FIELD</button>
+          <button id="odds" type="button" aria-pressed="true" title="Show or hide the risk percentage on every hidden cell">% ON</button>
+          <button id="sim" type="button" title="Play 100 games instantly to fill in the statistics">SIM +100</button>
+          <label>STEP DELAY <input id="speed" type="range" min="15" max="500" value="110"> <span id="speed-value">110 MS</span></label>
+        </div>
+      </section>
+
+      <div class="tiles">
+        <div class="tile hero"><span>WIN RATE</span><b id="k-win">--.-%</b></div>
+        <div class="tile"><span>RECORD</span><b id="k-games">0W / 0L</b></div>
+        <div class="tile"><span>STREAK</span><b id="k-streak">0</b></div>
+        <div class="tile"><span>FIELD CLEARED</span><b id="k-cleared">0.0%</b></div>
+        <div class="tile"><span>MINES LOCATED</span><b id="k-mines">0 / 0</b></div>
+        <div class="tile"><span>GUESSES THIS FIELD</span><b id="k-guesses">0</b></div>
+        <div class="tile"><span>ODDS OF GETTING HERE</span><b id="k-survival">100.0%</b></div>
+        <div class="tile"><span>LAST ANALYSIS</span><b id="k-ms">--</b></div>
+      </div>
+
+      <section class="panel">
+        <header><span>12 / SOLVER SETTINGS</span><span>CHANGES RESET SESSION STATS</span></header>
+        <div class="body">
+          <div class="presets">
+            <button type="button" data-preset="optimal">OPTIMAL</button>
+            <button type="button" data-preset="nofreebies">NO FREEBIES</button>
+            <button type="button" data-preset="daredevil">DAREDEVIL</button>
+            <button type="button" data-preset="coinflip">COIN FLIP</button>
+            <button type="button" data-preset="sloppy">SLOPPY</button>
+            <button type="button" data-preset="gutfeel">GUT FEEL</button>
+            <button type="button" data-preset="kamikaze" class="danger">KAMIKAZE</button>
+          </div>
+        </div>
+        <div class="settings">
+          <div class="group">
+            <h3>RISK WINDOW</h3>
+            <div class="slider"><div><label for="p-min">MIN RISK TO CLICK</label><b id="p-min-v">0%</b></div><input id="p-min" type="range" min="0" max="100" value="0"></div>
+            <div class="slider"><div><label for="p-max">MAX RISK TO CLICK</label><b id="p-max-v">100%</b></div><input id="p-max" type="range" min="0" max="100" value="100"></div>
+            <div class="window" aria-hidden="true"><div id="p-window"></div></div>
+            <div class="scale" aria-hidden="true"><span>0</span><span>25</span><span>50</span><span>75</span><span>100</span></div>
+          </div>
+          <div class="group">
+            <h3>CLICK RULES</h3>
+            <label class="field"><span>TAKE GUARANTEED-SAFE CELLS<small>OFF: IT MUST GAMBLE EVERY MOVE</small></span><input id="p-safe" type="checkbox" checked></label>
+            <label class="field"><span>NEVER CLICK CERTAIN MINES<small>OFF: 100% CELLS ARE FAIR GAME</small></span><input id="p-mines" type="checkbox" checked></label>
+            <label class="field"><span>CLEAR ALL SAFE CELLS AT ONCE<small>OFF: ONE CELL PER MOVE</small></span><input id="p-batch" type="checkbox" checked></label>
+          </div>
+          <div class="group">
+            <h3>SELECTION</h3>
+            <label class="field"><span>PICK IN WINDOW</span><select id="p-pick"><option value="safest">LOWEST RISK</option><option value="riskiest">HIGHEST RISK</option><option value="random">RANDOM</option></select></label>
+            <label class="field"><span>TIE-BREAK</span><select id="p-tie"><option value="edges">EDGES FIRST</option><option value="center">CENTRE FIRST</option><option value="random">RANDOM</option></select></label>
+            <label class="field"><span>OPENING CLICK</span><select id="p-open"><option value="corner">CORNER</option><option value="center">CENTRE</option><option value="random">RANDOM</option></select></label>
+          </div>
+          <div class="group">
+            <h3>ENGINE AND ERROR</h3>
+            <label class="field"><span>ODDS ENGINE<small>ESTIMATE: ONE NUMBER AT A TIME</small></span><select id="p-engine"><option value="exact">EXACT</option><option value="estimate">ESTIMATE</option></select></label>
+            <div class="slider"><div><label for="p-blunder">MISCLICK RATE</label><b id="p-blunder-v">0%</b></div><input id="p-blunder" type="range" min="0" max="50" value="0"></div>
+          </div>
+          <div class="group">
+            <h3>DISPLAY</h3>
+            <label class="field"><span>RISK HEATMAP</span><input id="d-heat" type="checkbox" checked></label>
+            <label class="field"><span>RISK % ON EVERY HIDDEN CELL<small>WHOLE PERCENT</small></span><input id="d-odds" type="checkbox" checked></label>
+            <div class="field"><span>SESSION STATISTICS</span><button id="reset" type="button">RESET</button></div>
+          </div>
+          <div class="group wide">
+            <h3>CURRENT BEHAVIOUR</h3>
+            <p id="p-summary"></p>
+          </div>
+        </div>
+      </section>
+
+      <div class="charts">
+        <section class="panel"><header><span>02 / FIELD CLEARED %</span><span>PER MOVE</span></header><div class="body"><canvas id="c-progress"></canvas></div></section>
+        <section class="panel"><header><span>03 / REVEALED NUMBERS</span><span>COUNT</span></header><div class="body"><canvas id="c-nums"></canvas></div></section>
+        <section class="panel"><header><span>04 / ANALYSIS TIME</span><span>MS</span></header><div class="body"><canvas id="c-time"></canvas></div></section>
+      </div>
+    </div>
+
+    <div class="col">
+      <section class="panel">
+        <header><span>05 / NEXT MOVE</span><span>RISK / SOLVER REGIONS</span></header>
+        <div class="body pair"><canvas id="c-gauge"></canvas><canvas id="c-map"></canvas></div>
+      </section>
+
+      <section class="panel">
+        <header><span>06 / SOLVER INTERNALS</span><span id="s-mode">EXACT</span></header>
+        <div class="body rows">
+          <div>CONSTRAINTS<b id="s-constraints">0</b></div>
+          <div>CELL GROUPS<b id="s-groups">0</b></div>
+          <div>REGIONS<b id="s-components">0</b></div>
+          <div>LARGEST<b id="s-largest">0</b></div>
+          <div>BORDER CELLS<b id="s-border">0</b></div>
+          <div>INTERIOR CELLS<b id="s-interior">0</b></div>
+          <div>SEARCH STEPS<b id="s-nodes">0</b></div>
+          <div>VALID LAYOUTS<b id="s-layouts">--</b></div>
+          <div>EXP. BORDER MINES<b id="s-expected">0</b></div>
+        </div>
+      </section>
+
+      <section class="panel"><header><span>07 / WIN RATE %</span><span>CUMULATIVE</span></header><div class="body"><canvas id="c-win"></canvas></div></section>
+      <section class="panel"><header><span>08 / HIDDEN CELLS BY RISK %</span><span>COUNT</span></header><div class="body"><canvas id="c-risk"></canvas></div></section>
+      <section class="panel"><header><span>09 / MINES ON BORDER</span><span>PROBABILITY</span></header><div class="body"><canvas id="c-border"></canvas></div></section>
+      <section class="panel">
+        <header><span>10 / GUESS CALIBRATION</span><span id="calib-n">0 GUESSES</span></header>
+        <div class="body">
+          <canvas id="c-calib"></canvas>
+          <div class="key"><span><i style="background: var(--red)"></i>ACTUAL DETONATION %</span><span><i style="outline: 1px solid var(--bright); outline-offset: -1px"></i>PREDICTED %</span><span>BY PREDICTED RISK BAND</span></div>
+        </div>
+      </section>
+      <section class="panel"><header><span>11 / EVENT LOG</span><span>STREAM</span></header><div id="log"></div></section>
+    </div>
+  </div>
+</div>
+<script>/*__SCRIPT__*/</script>
+</body>
+</html>

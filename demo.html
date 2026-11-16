@@ -1,0 +1,1624 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Minesweeper solver</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0a0b0b;
+    --panel: #0e1010;
+    --cell: #161a19;
+    --open: #0b0c0c;
+    --grid: #1a1e1d;
+    --line: #2a302e;
+    --dim: #6b7572;
+    --text: #c8d0cd;
+    --bright: #f2f5f4;
+    --accent: #4fe0a8;
+    --red: #ff3b3b;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); }
+  body {
+    padding: 12px;
+    color: var(--text);
+    font: 11px/1.5 var(--mono);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  .shell { max-width: 1500px; margin: 0 auto; display: grid; gap: 8px; }
+
+  /* header */
+  .top {
+    display: flex; flex-wrap: wrap; gap: 6px 24px; align-items: center;
+    border: 1px solid var(--line); background: var(--panel); padding: 8px 12px;
+  }
+  .top h1 { margin: 0; font-size: 13px; font-weight: 600; color: var(--bright); letter-spacing: 0.14em; }
+  .top .spacer { flex: 1; }
+  .kv { color: var(--dim); white-space: nowrap; }
+  .kv b { color: var(--text); font-weight: 500; margin-left: 6px; }
+  .dot { display: inline-block; width: 6px; height: 6px; background: var(--accent); margin-right: 6px; animation: blink 1.6s steps(2) infinite; }
+  @keyframes blink { 50% { opacity: 0.25; } }
+  @media (prefers-reduced-motion: reduce) { .dot { animation: none; } }
+
+  /* layout */
+  .layout { display: grid; grid-template-columns: minmax(0, 1.75fr) minmax(300px, 1fr); gap: 8px; align-items: start; }
+  .col { display: grid; gap: 8px; min-width: 0; }
+  @media (max-width: 980px) { .layout { grid-template-columns: minmax(0, 1fr); } }
+
+  .panel { border: 1px solid var(--line); background: var(--panel); min-width: 0; }
+  .panel > header {
+    display: flex; justify-content: space-between; gap: 8px;
+    padding: 5px 10px; border-bottom: 1px solid var(--line);
+    color: var(--dim); font-size: 10px;
+  }
+  .panel > header span:first-child { color: var(--text); }
+  .panel > .body { padding: 10px; }
+  canvas { display: block; width: 100%; height: 112px; }
+
+  /* field */
+  #banner {
+    font-size: clamp(12px, 1.7vw, 19px); letter-spacing: 0.2em; color: var(--accent);
+    padding: 2px 0 10px; min-height: 2.2em;
+  }
+  #banner[data-state="lost"] { color: var(--red); }
+  #banner[data-state="guess"] { color: var(--bright); }
+  /* one to sixteen fields side by side */
+  #fields { display: grid; gap: 8px; grid-template-columns: repeat(var(--fcols, 1), minmax(0, 1fr)); }
+  #fields[data-n="2"], #fields[data-n="4"] { --fcols: 2; }
+  #fields[data-n="8"], #fields[data-n="16"] { --fcols: 4; }
+  @media (max-width: 760px) { #fields[data-n="8"], #fields[data-n="16"] { --fcols: 2; } }
+  .fieldbox { min-width: 0; }
+  #fields:not([data-n="1"]) .fieldbox { border: 1px solid var(--line); padding: 0 6px 6px; }
+  #fields:not([data-n="1"]) .fieldbox.focus { border-color: var(--accent); }
+  .caption {
+    display: none; width: 100%; justify-content: space-between; gap: 8px;
+    font: inherit; font-size: 10px; text-transform: inherit; letter-spacing: inherit;
+    color: var(--dim); background: none; border: 0; padding: 4px 0; cursor: pointer; white-space: nowrap; overflow: hidden;
+  }
+  #fields:not([data-n="1"]) .caption { display: flex; }
+  .caption span:first-child { color: var(--text); }
+  .fieldbox[data-state="won"] .caption span:last-child { color: var(--accent); }
+  .fieldbox[data-state="lost"] .caption span:last-child { color: var(--red); }
+  .layout[data-wide] { grid-template-columns: minmax(0, 1fr); }
+  .layout[data-wide] > .col:last-child { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); align-items: start; }
+  .board-wrap { container-type: inline-size; }
+  .board {
+    display: grid; grid-template-columns: repeat(var(--cols), 1fr); gap: 1px;
+    width: min(100%, calc(var(--cols) * 28px)); margin: 0 auto;
+    background: var(--line); border: 1px solid var(--line);
+    user-select: none;
+  }
+  .board button {
+    aspect-ratio: 1; min-width: 0; padding: 0; border: 0; border-radius: 0;
+    background: var(--cell); color: var(--text);
+    font: 600 min(14px, calc(100cqw / var(--cols) * 0.55)) / 1 var(--mono);
+    overflow: hidden;
+    cursor: crosshair;
+  }
+  .board button:disabled { cursor: default; }
+  .board button:not(:disabled):hover { outline: 1px solid var(--bright); outline-offset: -1px; }
+  .board .open { background: var(--open); }
+  .board .risk { background-image: linear-gradient(rgba(255, 59, 59, var(--risk)), rgba(255, 59, 59, var(--risk))); }
+  .board .safe { background: rgba(79, 224, 168, 0.6); }
+  .board .flag { background: var(--red); color: #1a0606; }
+  .board .mine { color: var(--red); }
+  .board .boom { background: var(--red); color: #fff; }
+  .board .guess { outline: 2px solid var(--bright); outline-offset: -2px; }
+  .n1 { color: var(--accent) !important; } .n2 { color: #9af0cf !important; }
+  .n3, .n4, .n5, .n6, .n7, .n8 { color: var(--bright) !important; }
+  .board .safe.odds { color: #06130e; }
+  .board .odds { font-weight: 500; font-size: min(10px, calc(100cqw / var(--cols) * 0.4)); color: var(--bright); }
+  #readout { margin: 8px 0 0; color: var(--dim); min-height: 1.5em; }
+
+  .controls { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 8px 10px; border-top: 1px solid var(--line); }
+  .controls button, .controls select {
+    font: inherit; text-transform: inherit; letter-spacing: inherit;
+    color: var(--text); background: transparent; border: 1px solid var(--line); border-radius: 0;
+    padding: 5px 12px; cursor: pointer;
+  }
+  .controls button:hover, .controls select:hover { border-color: var(--dim); color: var(--bright); }
+  .controls button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #06130e; font-weight: 600; }
+  .controls #odds[aria-pressed="true"] { background: transparent; color: var(--accent); font-weight: 500; }
+  .controls button:disabled { color: var(--dim); cursor: wait; }
+  .controls select option { background: var(--panel); }
+  .controls label { display: flex; align-items: center; gap: 8px; color: var(--dim); margin-left: auto; }
+  .controls input[type="range"] { accent-color: var(--accent); width: 110px; }
+
+  /* number tiles */
+  .tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); }
+  .tile { background: var(--panel); padding: 8px 10px; }
+  .tile span { display: block; color: var(--dim); font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tile b { display: block; color: var(--bright); font-size: clamp(13px, 1.3vw, 17px); overflow: hidden; text-overflow: ellipsis; font-weight: 500; letter-spacing: 0.02em; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .tile.hero b { color: var(--accent); }
+
+  @media (max-width: 620px) { .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  .charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; }
+  .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+  /* settings */
+  .settings { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 1px; border-top: 1px solid var(--line); overflow: hidden; }
+  .group { background: var(--panel); padding: 10px 12px 12px; min-width: 0; box-shadow: 0 0 0 1px var(--line); }
+  .group h3 { margin: 0 0 8px; font-size: 10px; font-weight: 500; color: var(--dim); letter-spacing: 0.1em; }
+  .group.wide { grid-column: 1 / -1; }
+  .presets { display: flex; flex-wrap: wrap; gap: 6px; }
+  .presets button, #reset {
+    font: inherit; text-transform: inherit; letter-spacing: inherit; color: var(--text);
+    background: transparent; border: 1px solid var(--line); border-radius: 0; padding: 5px 10px; cursor: pointer;
+  }
+  .presets button:hover, #reset:hover { border-color: var(--dim); color: var(--bright); }
+  .presets button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+  .presets button.danger[aria-pressed="true"] { border-color: var(--red); color: var(--red); }
+  .field { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 4px 0; color: var(--text); }
+  .field + .field { border-top: 1px solid var(--grid); }
+  .field small { display: block; font-size: 9px; color: var(--dim); letter-spacing: 0.04em; }
+  .field select {
+    font: inherit; text-transform: inherit; letter-spacing: inherit; color: var(--text);
+    background: var(--panel); border: 1px solid var(--line); border-radius: 0; padding: 3px 6px; max-width: 55%;
+  }
+  .field input[type="checkbox"] {
+    appearance: none; width: 28px; height: 14px; margin: 0; flex: none; cursor: pointer;
+    border: 1px solid var(--dim); background: transparent; position: relative;
+  }
+  .field input[type="checkbox"]::after { content: ""; position: absolute; top: 2px; left: 2px; width: 8px; height: 8px; background: var(--dim); }
+  .field input[type="checkbox"]:checked { border-color: var(--accent); }
+  .field input[type="checkbox"]:checked::after { left: 16px; background: var(--accent); }
+  .field input[type="checkbox"]:focus-visible, .field select:focus-visible, .slider input:focus-visible { outline: 1px solid var(--bright); outline-offset: 2px; }
+  .slider { padding: 4px 0 6px; }
+  .slider div { display: flex; justify-content: space-between; color: var(--text); }
+  .slider b { color: var(--bright); font-weight: 500; font-variant-numeric: tabular-nums; }
+  .slider input { width: 100%; margin: 4px 0 0; accent-color: var(--accent); }
+  .window { position: relative; height: 10px; margin-top: 8px; border: 1px solid var(--line); background: repeating-linear-gradient(90deg, transparent 0 calc(10% - 1px), var(--line) calc(10% - 1px) 10%); }
+  #p-window { position: absolute; top: 0; bottom: 0; background: var(--accent); opacity: 0.75; }
+  .scale { display: flex; justify-content: space-between; color: var(--dim); font-size: 9px; margin-top: 3px; }
+  #p-summary { margin: 0; color: var(--text); line-height: 1.7; }
+
+  .rows { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; }
+  .rows div { display: flex; justify-content: space-between; gap: 8px; padding: 3px 0; border-bottom: 1px solid var(--grid); color: var(--dim); }
+  .rows b { color: var(--text); font-weight: 500; font-variant-numeric: tabular-nums; }
+  @media (max-width: 420px) { .rows { grid-template-columns: 1fr; } }
+
+  .key { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 8px; color: var(--dim); font-size: 10px; }
+  .key i { display: inline-block; width: 8px; height: 8px; margin-right: 5px; vertical-align: -1px; }
+
+  #log { height: 150px; overflow-y: auto; padding: 8px 10px; color: var(--dim); font-size: 10px; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+  #log div { white-space: nowrap; }
+  #log .good { color: var(--accent); }
+  #log .bad { color: var(--red); }
+  #log .warn { color: var(--text); }
+</style>
+</head>
+<body>
+<div class="shell">
+  <div class="top">
+    <h1>MSW-SOLVER / PROBABILITY ENGINE</h1>
+    <span class="kv"><i class="dot"></i>ONLINE</span>
+    <span class="spacer"></span>
+    <span class="kv">MODE<b id="mode">AUTONOMOUS</b></span>
+    <span class="kv">SEED<b id="seed">--</b></span>
+    <span class="kv">UPTIME<b id="clock">T+00:00</b></span>
+  </div>
+
+  <div class="layout" id="layout">
+    <div class="col">
+      <section class="panel">
+        <header><span>01 / FIELD</span><span id="focus-name">LIVE</span></header>
+        <div class="body">
+          <div id="banner" role="status"></div>
+          <div id="fields" data-n="1"></div>
+          <p id="readout">NUMBERS ON HIDDEN CELLS ARE % CHANCE OF A MINE / HOVER FOR EXACT ODDS / CLICK TO PLAY</p>
+          <div class="key">
+            <span><i style="background: rgba(79,224,168,.6)"></i>CERTAINLY SAFE</span>
+            <span><i style="background: rgba(255,59,59,.35)"></i>RISK (REDDER IS WORSE)</span>
+            <span><i style="background: var(--red)"></i>CERTAIN MINE</span>
+            <span><i style="outline: 2px solid var(--bright); outline-offset: -2px"></i>BEST GUESS</span>
+          </div>
+        </div>
+        <div class="controls">
+          <select id="level" aria-label="Difficulty">
+            <option value="beginner">BEGINNER 9x9</option>
+            <option value="intermediate">INTERMEDIATE 16x16</option>
+            <option value="expert" selected>EXPERT 30x16</option>
+          </select>
+          <select id="count" aria-label="Number of fields running at once">
+            <option value="1" selected>1 FIELD</option>
+            <option value="2">2 FIELDS</option>
+            <option value="4">4 FIELDS</option>
+            <option value="8">8 FIELDS</option>
+            <option value="16">16 FIELDS</option>
+          </select>
+          <button id="auto" type="button" aria-pressed="true">PAUSE</button>
+          <button id="step" type="button">STEP</button>
+          <button id="new" type="button">NEW FIELD</button>
+          <button id="odds" type="button" aria-pressed="true" title="Show or hide the risk percentage on every hidden cell">% ON</button>
+          <button id="sim" type="button" title="Play 100 games instantly to fill in the statistics">SIM +100</button>
+          <label>STEP DELAY <input id="speed" type="range" min="15" max="500" value="110"> <span id="speed-value">110 MS</span></label>
+        </div>
+      </section>
+
+      <div class="tiles">
+        <div class="tile hero"><span>WIN RATE</span><b id="k-win">--.-%</b></div>
+        <div class="tile"><span>RECORD</span><b id="k-games">0W / 0L</b></div>
+        <div class="tile"><span>STREAK</span><b id="k-streak">0</b></div>
+        <div class="tile"><span>FIELD CLEARED</span><b id="k-cleared">0.0%</b></div>
+        <div class="tile"><span>MINES LOCATED</span><b id="k-mines">0 / 0</b></div>
+        <div class="tile"><span>GUESSES THIS FIELD</span><b id="k-guesses">0</b></div>
+        <div class="tile"><span>ODDS OF GETTING HERE</span><b id="k-survival">100.0%</b></div>
+        <div class="tile"><span>LAST ANALYSIS</span><b id="k-ms">--</b></div>
+      </div>
+
+      <section class="panel">
+        <header><span>12 / SOLVER SETTINGS</span><span>CHANGES RESET SESSION STATS</span></header>
+        <div class="body">
+          <div class="presets">
+            <button type="button" data-preset="optimal">OPTIMAL</button>
+            <button type="button" data-preset="nofreebies">NO FREEBIES</button>
+            <button type="button" data-preset="daredevil">DAREDEVIL</button>
+            <button type="button" data-preset="coinflip">COIN FLIP</button>
+            <button type="button" data-preset="sloppy">SLOPPY</button>
+            <button type="button" data-preset="gutfeel">GUT FEEL</button>
+            <button type="button" data-preset="kamikaze" class="danger">KAMIKAZE</button>
+          </div>
+        </div>
+        <div class="settings">
+          <div class="group">
+            <h3>RISK WINDOW</h3>
+            <div class="slider"><div><label for="p-min">MIN RISK TO CLICK</label><b id="p-min-v">0%</b></div><input id="p-min" type="range" min="0" max="100" value="0"></div>
+            <div class="slider"><div><label for="p-max">MAX RISK TO CLICK</label><b id="p-max-v">100%</b></div><input id="p-max" type="range" min="0" max="100" value="100"></div>
+            <div class="window" aria-hidden="true"><div id="p-window"></div></div>
+            <div class="scale" aria-hidden="true"><span>0</span><span>25</span><span>50</span><span>75</span><span>100</span></div>
+          </div>
+          <div class="group">
+            <h3>CLICK RULES</h3>
+            <label class="field"><span>TAKE GUARANTEED-SAFE CELLS<small>OFF: IT MUST GAMBLE EVERY MOVE</small></span><input id="p-safe" type="checkbox" checked></label>
+            <label class="field"><span>NEVER CLICK CERTAIN MINES<small>OFF: 100% CELLS ARE FAIR GAME</small></span><input id="p-mines" type="checkbox" checked></label>
+            <label class="field"><span>CLEAR ALL SAFE CELLS AT ONCE<small>OFF: ONE CELL PER MOVE</small></span><input id="p-batch" type="checkbox" checked></label>
+          </div>
+          <div class="group">
+            <h3>SELECTION</h3>
+            <label class="field"><span>PICK IN WINDOW</span><select id="p-pick"><option value="safest">LOWEST RISK</option><option value="riskiest">HIGHEST RISK</option><option value="random">RANDOM</option></select></label>
+            <label class="field"><span>TIE-BREAK</span><select id="p-tie"><option value="edges">EDGES FIRST</option><option value="center">CENTRE FIRST</option><option value="random">RANDOM</option></select></label>
+            <label class="field"><span>OPENING CLICK</span><select id="p-open"><option value="corner">CORNER</option><option value="center">CENTRE</option><option value="random">RANDOM</option></select></label>
+          </div>
+          <div class="group">
+            <h3>ENGINE AND ERROR</h3>
+            <label class="field"><span>ODDS ENGINE<small>ESTIMATE: ONE NUMBER AT A TIME</small></span><select id="p-engine"><option value="exact">EXACT</option><option value="estimate">ESTIMATE</option></select></label>
+            <div class="slider"><div><label for="p-blunder">MISCLICK RATE</label><b id="p-blunder-v">0%</b></div><input id="p-blunder" type="range" min="0" max="50" value="0"></div>
+          </div>
+          <div class="group">
+            <h3>DISPLAY</h3>
+            <label class="field"><span>RISK HEATMAP</span><input id="d-heat" type="checkbox" checked></label>
+            <label class="field"><span>RISK % ON EVERY HIDDEN CELL<small>WHOLE PERCENT</small></span><input id="d-odds" type="checkbox" checked></label>
+            <div class="field"><span>SESSION STATISTICS</span><button id="reset" type="button">RESET</button></div>
+          </div>
+          <div class="group wide">
+            <h3>CURRENT BEHAVIOUR</h3>
+            <p id="p-summary"></p>
+          </div>
+        </div>
+      </section>
+
+      <div class="charts">
+        <section class="panel"><header><span>02 / FIELD CLEARED %</span><span>PER MOVE</span></header><div class="body"><canvas id="c-progress"></canvas></div></section>
+        <section class="panel"><header><span>03 / REVEALED NUMBERS</span><span>COUNT</span></header><div class="body"><canvas id="c-nums"></canvas></div></section>
+        <section class="panel"><header><span>04 / ANALYSIS TIME</span><span>MS</span></header><div class="body"><canvas id="c-time"></canvas></div></section>
+      </div>
+    </div>
+
+    <div class="col">
+      <section class="panel">
+        <header><span>05 / NEXT MOVE</span><span>RISK / SOLVER REGIONS</span></header>
+        <div class="body pair"><canvas id="c-gauge"></canvas><canvas id="c-map"></canvas></div>
+      </section>
+
+      <section class="panel">
+        <header><span>06 / SOLVER INTERNALS</span><span id="s-mode">EXACT</span></header>
+        <div class="body rows">
+          <div>CONSTRAINTS<b id="s-constraints">0</b></div>
+          <div>CELL GROUPS<b id="s-groups">0</b></div>
+          <div>REGIONS<b id="s-components">0</b></div>
+          <div>LARGEST<b id="s-largest">0</b></div>
+          <div>BORDER CELLS<b id="s-border">0</b></div>
+          <div>INTERIOR CELLS<b id="s-interior">0</b></div>
+          <div>SEARCH STEPS<b id="s-nodes">0</b></div>
+          <div>VALID LAYOUTS<b id="s-layouts">--</b></div>
+          <div>EXP. BORDER MINES<b id="s-expected">0</b></div>
+        </div>
+      </section>
+
+      <section class="panel"><header><span>07 / WIN RATE %</span><span>CUMULATIVE</span></header><div class="body"><canvas id="c-win"></canvas></div></section>
+      <section class="panel"><header><span>08 / HIDDEN CELLS BY RISK %</span><span>COUNT</span></header><div class="body"><canvas id="c-risk"></canvas></div></section>
+      <section class="panel"><header><span>09 / MINES ON BORDER</span><span>PROBABILITY</span></header><div class="body"><canvas id="c-border"></canvas></div></section>
+      <section class="panel">
+        <header><span>10 / GUESS CALIBRATION</span><span id="calib-n">0 GUESSES</span></header>
+        <div class="body">
+          <canvas id="c-calib"></canvas>
+          <div class="key"><span><i style="background: var(--red)"></i>ACTUAL DETONATION %</span><span><i style="outline: 1px solid var(--bright); outline-offset: -1px"></i>PREDICTED %</span><span>BY PREDICTED RISK BAND</span></div>
+        </div>
+      </section>
+      <section class="panel"><header><span>11 / EVENT LOG</span><span>STREAM</span></header><div id="log"></div></section>
+    </div>
+  </div>
+</div>
+<script>"use strict";
+(() => {
+  var __defProp = Object.defineProperty;
+  var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
+  var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
+
+  // src/game.ts
+  var HIDDEN = -1;
+  var LEVELS = {
+    beginner: { width: 9, height: 9, mines: 10 },
+    intermediate: { width: 16, height: 16, mines: 40 },
+    expert: { width: 30, height: 16, mines: 99 }
+  };
+  var tables = /* @__PURE__ */ new Map();
+  function neighborTable(width, height) {
+    const key = `${width}x${height}`;
+    let table = tables.get(key);
+    if (!table) {
+      table = [];
+      for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+          const list = [];
+          for (let dy = -1; dy <= 1; dy++) {
+            for (let dx = -1; dx <= 1; dx++) {
+              const nx = x + dx;
+              const ny = y + dy;
+              if ((dx || dy) && nx >= 0 && nx < width && ny >= 0 && ny < height) {
+                list.push(ny * width + nx);
+              }
+            }
+          }
+          table.push(list);
+        }
+      }
+      tables.set(key, table);
+    }
+    return table;
+  }
+  function mulberry32(seed) {
+    let a = seed >>> 0;
+    return () => {
+      a = a + 1831565813 >>> 0;
+      let t = a;
+      t = Math.imul(t ^ t >>> 15, t | 1);
+      t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+      return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    };
+  }
+  var Game = class _Game {
+    /**
+     * Mines are placed on the first reveal, never on the clicked cell or its
+     * neighbours, so the first click always opens an area (the rule most
+     * modern versions use).
+     */
+    constructor(config2, seed = Date.now()) {
+      __publicField(this, "width");
+      __publicField(this, "height");
+      __publicField(this, "mineCount");
+      /** What the player sees. */
+      __publicField(this, "cells");
+      __publicField(this, "state", "playing");
+      /** The cell that ended the game, if it was lost. */
+      __publicField(this, "lostAt", null);
+      __publicField(this, "mineAt");
+      __publicField(this, "placed", false);
+      __publicField(this, "hiddenSafe");
+      __publicField(this, "random");
+      __publicField(this, "neighbors");
+      const size = config2.width * config2.height;
+      if (config2.mines < 0 || config2.mines >= size) throw new Error("Invalid mine count");
+      this.width = config2.width;
+      this.height = config2.height;
+      this.mineCount = config2.mines;
+      this.cells = new Int8Array(size).fill(HIDDEN);
+      this.mineAt = new Uint8Array(size);
+      this.hiddenSafe = size - config2.mines;
+      this.random = mulberry32(seed);
+      this.neighbors = neighborTable(config2.width, config2.height);
+    }
+    /** Build a game with mines at fixed positions. Used by tests. */
+    static fromMines(width, height, mineIndexes) {
+      const game = new _Game({ width, height, mines: mineIndexes.length });
+      for (const i of mineIndexes) game.mineAt[i] = 1;
+      game.placed = true;
+      return game;
+    }
+    view() {
+      return { width: this.width, height: this.height, mines: this.mineCount, cells: this.cells };
+    }
+    /** Only meaningful to show once the game is over. */
+    isMine(index) {
+      return this.mineAt[index] === 1;
+    }
+    reveal(index) {
+      if (this.state !== "playing" || this.cells[index] !== HIDDEN) return;
+      if (!this.placed) this.placeMines(index);
+      if (this.mineAt[index]) {
+        this.state = "lost";
+        this.lostAt = index;
+        return;
+      }
+      const stack = [index];
+      while (stack.length) {
+        const cell = stack.pop();
+        if (this.cells[cell] !== HIDDEN) continue;
+        let count = 0;
+        for (const n of this.neighbors[cell]) count += this.mineAt[n];
+        this.cells[cell] = count;
+        this.hiddenSafe--;
+        if (count === 0) {
+          for (const n of this.neighbors[cell]) if (this.cells[n] === HIDDEN) stack.push(n);
+        }
+      }
+      if (this.hiddenSafe === 0) this.state = "won";
+    }
+    placeMines(firstClick) {
+      const size = this.width * this.height;
+      const excluded = /* @__PURE__ */ new Set([firstClick, ...this.neighbors[firstClick]]);
+      let candidates = [];
+      for (let i = 0; i < size; i++) if (!excluded.has(i)) candidates.push(i);
+      if (candidates.length < this.mineCount) {
+        candidates = [];
+        for (let i = 0; i < size; i++) if (i !== firstClick) candidates.push(i);
+      }
+      for (let i = 0; i < this.mineCount; i++) {
+        const j = i + Math.floor(this.random() * (candidates.length - i));
+        [candidates[i], candidates[j]] = [candidates[j], candidates[i]];
+        this.mineAt[candidates[i]] = 1;
+      }
+      this.placed = true;
+    }
+  };
+
+  // src/policy.ts
+  var OPTIMAL = {
+    takeSafe: true,
+    avoidMines: true,
+    minRisk: 0,
+    maxRisk: 1,
+    pick: "safest",
+    tieBreak: "edges",
+    opening: "corner",
+    batchSafe: true,
+    blunder: 0
+  };
+  var EPSILON = 1e-9;
+  function chooseMove(view, analysis, policy2, first, random = Math.random) {
+    const { width, height, cells } = view;
+    const size = width * height;
+    const p = analysis.probability;
+    const pickRandom = (list) => list[Math.floor(random() * list.length)];
+    const hidden = [];
+    for (let i = 0; i < size; i++) if (cells[i] === HIDDEN) hidden.push(i);
+    if (first) {
+      const center = Math.floor(height / 2) * width + Math.floor(width / 2);
+      const cell2 = policy2.opening === "corner" ? 0 : policy2.opening === "center" ? center : pickRandom(hidden);
+      return { cells: [cell2], risk: 0, inWindow: true, blunder: false };
+    }
+    if (policy2.blunder > 0 && random() < policy2.blunder) {
+      const cell2 = pickRandom(hidden);
+      return { cells: [cell2], risk: p[cell2], inWindow: true, blunder: true };
+    }
+    const allowed = (i) => !(p[i] === 0 && !policy2.takeSafe) && !(p[i] === 1 && policy2.avoidMines);
+    const inWindow = (i) => p[i] >= policy2.minRisk - EPSILON && p[i] <= policy2.maxRisk + EPSILON;
+    if (policy2.takeSafe && policy2.batchSafe && policy2.pick === "safest" && policy2.minRisk <= 0) {
+      if (analysis.safe.length) return { cells: analysis.safe, risk: 0, inWindow: true, blunder: false };
+    }
+    let pool = hidden.filter((i) => allowed(i) && inWindow(i));
+    let fits = true;
+    if (pool.length === 0) {
+      fits = false;
+      let fallback = hidden.filter(allowed);
+      if (fallback.length === 0) fallback = hidden.filter((i) => !(p[i] === 1 && policy2.avoidMines));
+      if (fallback.length === 0) fallback = hidden;
+      const distance = (i) => Math.max(policy2.minRisk - p[i], p[i] - policy2.maxRisk, 0);
+      const nearest = Math.min(...fallback.map(distance));
+      pool = fallback.filter((i) => distance(i) <= nearest + EPSILON);
+    }
+    let candidates;
+    if (policy2.pick === "random") {
+      candidates = [pickRandom(pool)];
+    } else {
+      const best = policy2.pick === "safest" ? Math.min(...pool.map((i) => p[i])) : Math.max(...pool.map((i) => p[i]));
+      candidates = pool.filter((i) => Math.abs(p[i] - best) < EPSILON);
+    }
+    let cell = candidates[0];
+    if (candidates.length > 1) {
+      if (policy2.tieBreak === "random") {
+        cell = pickRandom(candidates);
+      } else if (policy2.tieBreak === "center") {
+        const score = (i) => Math.abs(i % width - (width - 1) / 2) + Math.abs(Math.floor(i / width) - (height - 1) / 2);
+        cell = candidates.reduce((a, b) => score(b) < score(a) ? b : a);
+      } else {
+        const neighbors = neighborTable(width, height);
+        const score = (i) => neighbors[i].reduce((n, j) => n + (cells[j] === HIDDEN ? 1 : 0), 0);
+        cell = candidates.reduce((a, b) => score(b) < score(a) ? b : a);
+      }
+    }
+    return { cells: [cell], risk: p[cell], inWindow: fits, blunder: false };
+  }
+
+  // src/solver.ts
+  var NODE_BUDGET = 3e6;
+  var EPSILON2 = 1e-9;
+  var BudgetExceeded = class extends Error {
+  };
+  var CHOOSE = [];
+  for (let n = 0; n <= 8; n++) {
+    CHOOSE.push([]);
+    for (let k = 0; k <= n; k++) {
+      CHOOSE[n].push(k === 0 || k === n ? 1 : CHOOSE[n - 1][k - 1] + CHOOSE[n - 1][k]);
+    }
+  }
+  var logFactorial = [0];
+  function logChoose(n, k) {
+    if (k < 0 || k > n) return -Infinity;
+    while (logFactorial.length <= n) {
+      logFactorial.push(logFactorial[logFactorial.length - 1] + Math.log(logFactorial.length));
+    }
+    return logFactorial[n] - logFactorial[k] - logFactorial[n - k];
+  }
+  function convolve(a, b, cap) {
+    const out = new Array(Math.min(a.length + b.length - 1, cap + 1)).fill(0);
+    for (let i = 0; i < a.length; i++) {
+      if (a[i] === 0) continue;
+      for (let j = 0; j < b.length && i + j < out.length; j++) out[i + j] += a[i] * b[j];
+    }
+    return out;
+  }
+  function analyze(view, options = {}) {
+    const { width, height, mines: totalMines, cells } = view;
+    const size = width * height;
+    const neighbors = neighborTable(width, height);
+    const probability = new Float64Array(size).fill(NaN);
+    const component = new Int16Array(size).fill(-1);
+    const constraints = [];
+    const cellConstraints = /* @__PURE__ */ new Map();
+    let hiddenCount = 0;
+    for (let i = 0; i < size; i++) {
+      if (cells[i] === HIDDEN) {
+        hiddenCount++;
+        continue;
+      }
+      const hidden = neighbors[i].filter((n) => cells[n] === HIDDEN);
+      if (hidden.length === 0) continue;
+      const id = constraints.length;
+      constraints.push({ cells: hidden, mines: cells[i] });
+      for (const cell of hidden) {
+        const list = cellConstraints.get(cell);
+        if (list) list.push(id);
+        else cellConstraints.set(cell, [id]);
+      }
+    }
+    const groups = [];
+    const groupByKey = /* @__PURE__ */ new Map();
+    for (const [cell, ids] of cellConstraints) {
+      const key = ids.join(",");
+      const existing = groupByKey.get(key);
+      if (existing === void 0) {
+        groupByKey.set(key, groups.length);
+        groups.push({ cells: [cell], constraints: ids });
+      } else {
+        groups[existing].cells.push(cell);
+      }
+    }
+    const constraintGroups = constraints.map(() => []);
+    groups.forEach((group, g) => {
+      for (const c of group.constraints) constraintGroups[c].push(g);
+    });
+    const parent = groups.map((_, i) => i);
+    const find = (x) => {
+      while (parent[x] !== x) {
+        parent[x] = parent[parent[x]];
+        x = parent[x];
+      }
+      return x;
+    };
+    for (const list of constraintGroups) {
+      for (let i = 1; i < list.length; i++) parent[find(list[i])] = find(list[0]);
+    }
+    const componentConstraints = /* @__PURE__ */ new Map();
+    constraintGroups.forEach((list, c) => {
+      const root = find(list[0]);
+      const existing = componentConstraints.get(root);
+      if (existing) existing.push(c);
+      else componentConstraints.set(root, [c]);
+    });
+    const borderCells = cellConstraints.size;
+    const interiorCells = hiddenCount - borderCells;
+    let results;
+    const budget = { nodes: 0, limit: options.nodeBudget ?? NODE_BUDGET };
+    try {
+      results = [...componentConstraints.values()].map(
+        (ids) => enumerateComponent(ids, constraints, groups, constraintGroups, totalMines, budget)
+      );
+    } catch (err) {
+      if (!(err instanceof BudgetExceeded)) throw err;
+      return estimate(view, constraints, cellConstraints, hiddenCount, groups.length);
+    }
+    const count = results.length;
+    const prefix = [[1]];
+    for (let i = 0; i < count; i++) prefix.push(convolve(prefix[i], results[i].counts, totalMines));
+    const suffix = new Array(count + 1);
+    suffix[count] = [1];
+    for (let i = count - 1; i >= 0; i--) {
+      suffix[i] = convolve(results[i].counts, suffix[i + 1], totalMines);
+    }
+    const all = prefix[count];
+    let scale = -Infinity;
+    for (let k = 0; k < all.length; k++) {
+      if (all[k] > 0) scale = Math.max(scale, logChoose(interiorCells, totalMines - k));
+    }
+    if (scale === -Infinity) throw new Error("The board has no valid mine layout");
+    const interiorWays = (k) => Math.exp(logChoose(interiorCells, totalMines - k) - scale);
+    let total = 0;
+    for (let k = 0; k < all.length; k++) total += all[k] * interiorWays(k);
+    results.forEach((result, i) => {
+      const others = convolve(prefix[i], suffix[i + 1], totalMines);
+      const weight = result.counts.map((_, k) => {
+        let sum = 0;
+        for (let r = 0; r < others.length; r++) sum += others[r] * interiorWays(k + r);
+        return sum;
+      });
+      result.groups.forEach((g, local) => {
+        let mineWeight = 0;
+        const perCount = result.groupMines[local];
+        for (let k = 0; k < perCount.length; k++) mineWeight += perCount[k] * weight[k];
+        const p = mineWeight / (groups[g].cells.length * total);
+        for (const cell of groups[g].cells) {
+          probability[cell] = p;
+          component[cell] = i;
+        }
+      });
+    });
+    if (interiorCells > 0) {
+      let mineWeight = 0;
+      for (let k = 0; k < all.length; k++) {
+        mineWeight += all[k] * Math.exp(logChoose(interiorCells - 1, totalMines - k - 1) - scale);
+      }
+      const p = mineWeight / total;
+      for (let i = 0; i < size; i++) {
+        if (cells[i] === HIDDEN && !cellConstraints.has(i)) probability[i] = p;
+      }
+    }
+    const borderMines = [];
+    let expectedBorderMines = 0;
+    for (let k = 0; k < all.length; k++) {
+      const p = all[k] * interiorWays(k) / total;
+      borderMines.push(p);
+      expectedBorderMines += k * p;
+    }
+    const stats = {
+      constraints: constraints.length,
+      groups: groups.length,
+      components: count,
+      largestComponent: results.reduce(
+        (max, r) => Math.max(max, r.groups.reduce((sum, g) => sum + groups[g].cells.length, 0)),
+        0
+      ),
+      borderCells,
+      interiorCells,
+      nodes: budget.nodes,
+      log10Layouts: (Math.log(total) + scale) / Math.LN10,
+      borderMines,
+      expectedBorderMines
+    };
+    return summarize(view, probability, true, component, stats);
+  }
+  function enumerateComponent(constraintIds, constraints, groups, constraintGroups, totalMines, budget) {
+    const order = [];
+    const seen = /* @__PURE__ */ new Set();
+    let cellCount = 0;
+    for (const c of constraintIds) {
+      for (const g of constraintGroups[c]) {
+        if (!seen.has(g)) {
+          seen.add(g);
+          order.push(g);
+          cellCount += groups[g].cells.length;
+        }
+      }
+    }
+    const maxMines = Math.min(totalMines, cellCount);
+    const counts = new Array(maxMines + 1).fill(0);
+    const groupMines = order.map(() => new Array(maxMines + 1).fill(0));
+    const chosen = new Array(order.length).fill(0);
+    const remaining = /* @__PURE__ */ new Map();
+    const capacity = /* @__PURE__ */ new Map();
+    for (const c of constraintIds) {
+      remaining.set(c, constraints[c].mines);
+      capacity.set(c, constraints[c].cells.length);
+    }
+    const search = (pos, used, ways) => {
+      if (++budget.nodes > budget.limit) throw new BudgetExceeded();
+      if (pos === order.length) {
+        counts[used] += ways;
+        for (let i = 0; i < chosen.length; i++) {
+          if (chosen[i]) groupMines[i][used] += ways * chosen[i];
+        }
+        return;
+      }
+      const group = groups[order[pos]];
+      const n = group.cells.length;
+      let lo = 0;
+      let hi = Math.min(n, maxMines - used);
+      for (const c of group.constraints) {
+        const need = remaining.get(c);
+        hi = Math.min(hi, need);
+        lo = Math.max(lo, need - (capacity.get(c) - n));
+      }
+      if (lo > hi) return;
+      for (const c of group.constraints) capacity.set(c, capacity.get(c) - n);
+      for (let j = lo; j <= hi; j++) {
+        for (const c of group.constraints) remaining.set(c, remaining.get(c) - j);
+        chosen[pos] = j;
+        search(pos + 1, used + j, ways * CHOOSE[n][j]);
+        for (const c of group.constraints) remaining.set(c, remaining.get(c) + j);
+      }
+      chosen[pos] = 0;
+      for (const c of group.constraints) capacity.set(c, capacity.get(c) + n);
+    };
+    search(0, 0, 1);
+    return { groups: order, counts, groupMines };
+  }
+  function estimate(view, constraints, cellConstraints, hiddenCount, groupCount) {
+    const size = view.width * view.height;
+    const probability = new Float64Array(size).fill(NaN);
+    let expectedBorderMines = 0;
+    for (const [cell, ids] of cellConstraints) {
+      let p = 0;
+      let safe = false;
+      for (const id of ids) {
+        const ratio = constraints[id].mines / constraints[id].cells.length;
+        if (ratio === 0) safe = true;
+        p = Math.max(p, ratio);
+      }
+      probability[cell] = safe ? 0 : p;
+      expectedBorderMines += probability[cell];
+    }
+    const interior = hiddenCount - cellConstraints.size;
+    if (interior > 0) {
+      const p = Math.min(1, Math.max(0, (view.mines - expectedBorderMines) / interior));
+      for (let i = 0; i < size; i++) {
+        if (view.cells[i] === HIDDEN && !cellConstraints.has(i)) probability[i] = p;
+      }
+    }
+    const stats = {
+      constraints: constraints.length,
+      groups: groupCount,
+      components: 0,
+      largestComponent: 0,
+      borderCells: cellConstraints.size,
+      interiorCells: interior,
+      nodes: 0,
+      log10Layouts: NaN,
+      borderMines: [],
+      expectedBorderMines
+    };
+    return summarize(view, probability, false, new Int16Array(size).fill(-1), stats);
+  }
+  function summarize(view, probability, exact, component, stats) {
+    const neighbors = neighborTable(view.width, view.height);
+    const safe = [];
+    const mines = [];
+    let guess = null;
+    let guessRisk = Infinity;
+    let guessHidden = Infinity;
+    for (let i = 0; i < probability.length; i++) {
+      let p = probability[i];
+      if (Number.isNaN(p)) continue;
+      if (p < EPSILON2) p = 0;
+      else if (p > 1 - EPSILON2) p = 1;
+      probability[i] = p;
+      if (p === 0) safe.push(i);
+      else if (p === 1) mines.push(i);
+      let hidden = 0;
+      for (const n of neighbors[i]) if (view.cells[n] === HIDDEN) hidden++;
+      if (p < guessRisk - EPSILON2 || p < guessRisk + EPSILON2 && hidden < guessHidden) {
+        guess = i;
+        guessRisk = p;
+        guessHidden = hidden;
+      }
+    }
+    return { probability, safe, mines, guess, exact, component, stats };
+  }
+
+  // web/main.ts
+  var C = {
+    grid: "#1a1e1d",
+    line: "#2a302e",
+    dim: "#6b7572",
+    text: "#c8d0cd",
+    bright: "#f2f5f4",
+    accent: "#4fe0a8",
+    red: "#ff3b3b"
+  };
+  var COMPONENT_SHADES = ["#4fe0a8", "#d7dbd9", "#2a9d78", "#9af0cf", "#7c8885", "#1f6f56"];
+  var FONT = 'ui-monospace, "SF Mono", Menlo, Consolas, monospace';
+  var el = (id) => document.getElementById(id);
+  var setText = (id, text) => {
+    el(id).textContent = text;
+  };
+  var config = LEVELS.expert;
+  var slots = [];
+  var focus = 0;
+  var policy = { ...OPTIMAL };
+  var engine = "exact";
+  var display = { heat: true, odds: true };
+  var auto = true;
+  var timer;
+  var delay = 110;
+  var started = performance.now();
+  var session = {
+    won: 0,
+    lost: 0,
+    streak: 0,
+    bestStreak: 0,
+    winSeries: [],
+    // cumulative win rate after each game
+    times: [],
+    // ms per analysis
+    calibration: []
+    // guesses grouped by predicted risk
+  };
+  function resetSession() {
+    session.won = session.lost = session.streak = session.bestStreak = 0;
+    session.winSeries = [];
+    session.times = [];
+    session.calibration = Array.from({ length: 5 }, () => ({ n: 0, deaths: 0, risk: 0 }));
+  }
+  function elapsed() {
+    const s = Math.floor((performance.now() - started) / 1e3);
+    return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+  }
+  function log(message, kind = "") {
+    const box = el("log");
+    const line = document.createElement("div");
+    if (kind) line.className = kind;
+    line.textContent = `T+${elapsed()}  ${message}`;
+    box.append(line);
+    while (box.childElementCount > 80) box.firstElementChild.remove();
+    box.scrollTop = box.scrollHeight;
+  }
+  var fieldName = (slot) => `F${String(slot.id + 1).padStart(2, "0")}`;
+  var tag = (slot) => slots.length > 1 ? `${fieldName(slot)} ` : "";
+  var coord = (i) => `X:${String(i % config.width).padStart(2, "0")} Y:${String(Math.floor(i / config.width)).padStart(2, "0")}`;
+  var pct = (p, digits = 1) => `${(p * 100).toFixed(digits)}%`;
+  function recordGuess(risk, died) {
+    const bucket = session.calibration[Math.min(4, Math.floor(risk * 10))];
+    bucket.n++;
+    bucket.risk += risk;
+    if (died) bucket.deaths++;
+  }
+  function recordGame(won) {
+    if (won) {
+      session.won++;
+      session.streak++;
+      session.bestStreak = Math.max(session.bestStreak, session.streak);
+    } else {
+      session.lost++;
+      session.streak = 0;
+    }
+    session.winSeries.push(session.won / (session.won + session.lost) * 100);
+    if (session.winSeries.length > 400) session.winSeries.shift();
+  }
+  function timedAnalyze(g) {
+    const t0 = performance.now();
+    const result = analyze(g.view(), engine === "estimate" ? { nodeBudget: 0 } : {});
+    session.times.push(performance.now() - t0);
+    if (session.times.length > 160) session.times.shift();
+    return result;
+  }
+  function buildFields(count) {
+    const container = el("fields");
+    container.replaceChildren();
+    container.dataset.n = String(count);
+    el("layout").toggleAttribute("data-wide", count >= 8);
+    slots.length = 0;
+    focus = 0;
+    for (let id = 0; id < count; id++) {
+      const root = document.createElement("div");
+      root.className = "fieldbox";
+      const caption = document.createElement("button");
+      caption.type = "button";
+      caption.className = "caption";
+      const name = document.createElement("span");
+      name.textContent = `F${String(id + 1).padStart(2, "0")}`;
+      const status = document.createElement("span");
+      caption.append(name, status);
+      caption.addEventListener("click", () => setFocus(id));
+      const wrap = document.createElement("div");
+      wrap.className = "board-wrap";
+      const board = document.createElement("div");
+      board.className = "board";
+      board.style.setProperty("--cols", String(config.width));
+      wrap.append(board);
+      root.append(caption, wrap);
+      container.append(root);
+      const slot = {
+        id,
+        game: new Game(config, 0),
+        seed: 0,
+        analysis: null,
+        lastAnalysis: null,
+        planned: null,
+        first: true,
+        guesses: 0,
+        survival: 1,
+        progress: [],
+        lastRisk: 0,
+        restartAt: 0,
+        root,
+        status,
+        board,
+        cells: [],
+        cache: []
+      };
+      for (let i = 0; i < config.width * config.height; i++) {
+        const cell = document.createElement("button");
+        cell.type = "button";
+        cell.addEventListener("click", () => {
+          setFocus(id);
+          move(slot, [i], true);
+          renderPanels();
+        });
+        cell.addEventListener("mouseenter", () => showReadout(slot, i));
+        board.append(cell);
+        slot.cells.push(cell);
+      }
+      slots.push(slot);
+      newGame(slot);
+    }
+    log(`${count} ${count === 1 ? "FIELD" : "FIELDS"} ONLINE / ${config.width}x${config.height} / ${config.mines} MINES`);
+    renderPanels();
+  }
+  function setFocus(id) {
+    if (focus === id) return;
+    focus = id;
+    slots.forEach(renderSlot);
+    renderPanels();
+  }
+  function newGame(slot) {
+    slot.seed = Math.floor(Math.random() * 4294967295);
+    slot.game = new Game(config, slot.seed);
+    slot.first = true;
+    slot.guesses = 0;
+    slot.survival = 1;
+    slot.progress = [];
+    slot.lastRisk = 0;
+    refreshSlot(slot, true);
+  }
+  function move(slot, targets, manual = false) {
+    const game = slot.game;
+    if (game.state !== "playing") return;
+    const first = slot.first;
+    const risk = first ? 0 : Math.max(...targets.map((t) => slot.analysis?.probability[t] ?? 0));
+    const isGuess = !first && risk > 0;
+    const plan = manual ? null : slot.planned;
+    for (const t of targets) game.reveal(t);
+    const state = game.state;
+    slot.first = false;
+    slot.lastRisk = risk;
+    if (isGuess) {
+      slot.guesses++;
+      recordGuess(risk, state === "lost");
+      if (state !== "lost") slot.survival *= 1 - risk;
+    }
+    const who = `${tag(slot)}${manual ? "MANUAL" : "SOLVER"}`;
+    const chatty = slots.length <= 2;
+    if (plan?.blunder) log(`${tag(slot)}BLUNDER: RANDOM CLICK ${coord(targets[0])}`, "bad");
+    if (plan && !plan.inWindow && chatty) log(`${tag(slot)}NOTHING IN RISK WINDOW / USING NEAREST`, "warn");
+    if (first) {
+      if (chatty) log(`${who} OPENING ${coord(targets[0])}`);
+    } else if (isGuess) {
+      if (slots.length <= 4) log(`${who} GUESS ${coord(targets[0])} RISK ${pct(risk)}`, "warn");
+    } else if (chatty) {
+      log(`${who} DEDUCED ${targets.length} SAFE`);
+    }
+    if (state === "won") {
+      recordGame(true);
+      log(`${tag(slot)}FIELD CLEARED / ${slot.guesses} GUESSES SURVIVED`, "good");
+    } else if (state === "lost") {
+      recordGame(false);
+      log(`${tag(slot)}DETONATION ${coord(game.lostAt)} ON ${pct(risk)} RISK`, "bad");
+    }
+    if (state !== "playing") slot.restartAt = performance.now() + Math.max(900, delay * 6);
+    refreshSlot(slot, true);
+  }
+  function refreshSlot(slot, moved) {
+    const game = slot.game;
+    if (game.state === "playing") {
+      slot.analysis = timedAnalyze(game);
+      slot.lastAnalysis = slot.analysis;
+      slot.planned = chooseMove(game.view(), slot.analysis, policy, slot.first);
+    } else {
+      slot.analysis = null;
+      slot.planned = null;
+    }
+    if (moved) {
+      let open = 0;
+      for (let i = 0; i < game.cells.length; i++) if (game.cells[i] !== HIDDEN) open++;
+      slot.progress.push(open / (game.cells.length - config.mines) * 100);
+    }
+    renderSlot(slot);
+  }
+  function advanceAll(force) {
+    const now = performance.now();
+    for (const slot of slots) {
+      if (slot.game.state !== "playing") {
+        if (force || now >= slot.restartAt) newGame(slot);
+      } else if (slot.planned) {
+        move(slot, slot.planned.cells);
+      }
+    }
+    renderPanels();
+  }
+  function simulate(games) {
+    let wins = 0;
+    for (let n = 0; n < games; n++) {
+      const g = new Game(config, Math.floor(Math.random() * 4294967295));
+      let first = true;
+      while (g.state === "playing") {
+        const a = timedAnalyze(g);
+        const next = chooseMove(g.view(), a, policy, first);
+        for (const cell of next.cells) g.reveal(cell);
+        if (!first && next.risk > 0) recordGuess(next.risk, g.state === "lost");
+        first = false;
+      }
+      const won = g.state === "won";
+      if (won) wins++;
+      recordGame(won);
+    }
+    log(`BATCH SIM ${games} GAMES / ${wins} CLEARED`, "good");
+    renderPanels();
+  }
+  function renderSlot(slot) {
+    const { game, analysis, planned } = slot;
+    const over = game.state !== "playing";
+    const fresh = slot.first;
+    const target = new Set(planned && !fresh ? planned.cells : []);
+    for (let i = 0; i < slot.cells.length; i++) {
+      const value = game.cells[i];
+      let cls = "";
+      let text = "";
+      let risk = "";
+      const disabled = over || value !== HIDDEN;
+      if (value !== HIDDEN) {
+        cls = `open n${value}`;
+        if (value > 0) text = String(value);
+      } else if (over) {
+        if (game.isMine(i)) {
+          cls = i === game.lostAt ? "boom" : "mine";
+          text = i === game.lostAt ? "\u2738" : "\u25CF";
+        }
+      } else if (!fresh) {
+        const p = analysis.probability[i];
+        if (p === 1) {
+          cls = "flag";
+          text = "\u25B2";
+        } else if (p === 0) {
+          cls = "safe";
+          if (display.odds) {
+            cls += " odds";
+            text = "0";
+          }
+        } else {
+          if (display.heat) {
+            cls = "risk";
+            risk = p.toFixed(3);
+          }
+          if (display.odds) {
+            cls += " odds";
+            text = String(Math.round(p * 100));
+          }
+        }
+        if (target.has(i) && (planned.risk > 0 || target.size === 1)) cls += " guess";
+      }
+      const key = `${cls}|${text}|${risk}|${disabled}`;
+      if (slot.cache[i] === key) continue;
+      slot.cache[i] = key;
+      const cell = slot.cells[i];
+      cell.className = cls;
+      cell.textContent = text;
+      if (risk) cell.style.setProperty("--risk", risk);
+      else cell.style.removeProperty("--risk");
+      cell.disabled = disabled;
+    }
+    slot.root.dataset.state = game.state;
+    slot.root.classList.toggle("focus", slots.length > 1 && slot.id === focus);
+    if (game.state === "won") slot.status.textContent = "CLEARED";
+    else if (game.state === "lost") slot.status.textContent = `DETONATED ON ${pct(slot.lastRisk, 0)}`;
+    else if (fresh) slot.status.textContent = "READY";
+    else {
+      const cleared = slot.progress[slot.progress.length - 1] ?? 0;
+      slot.status.textContent = `${cleared.toFixed(0)}% / RISK ${pct(planned.risk, 0)}`;
+    }
+  }
+  function renderBanner() {
+    const slot = slots[focus];
+    const { game, analysis, planned } = slot;
+    const banner = el("banner");
+    const prefix = slots.length > 1 ? `${fieldName(slot)} / ` : "";
+    banner.dataset.state = game.state;
+    let text;
+    if (game.state === "won") text = "FIELD CLEARED";
+    else if (game.state === "lost") text = `DETONATION AT ${coord(game.lostAt)}`;
+    else if (slot.first) text = "AWAITING OPENING MOVE";
+    else if (planned.risk === 0) {
+      const n = planned.cells.length;
+      text = `SAFE MOVE: ${n} ${n === 1 ? "CELL" : "CELLS"} QUEUED`;
+    } else {
+      banner.dataset.state = "guess";
+      const skipped = analysis.safe.length;
+      text = `NEXT CLICK ${coord(planned.cells[0])} / RISK ${pct(planned.risk)}` + (analysis.exact ? "" : " (EST)") + (skipped ? ` / IGNORING ${skipped} SAFE` : "");
+    }
+    banner.textContent = prefix + text;
+    setText("seed", `0x${slot.seed.toString(16).toUpperCase().padStart(8, "0")}`);
+  }
+  function showReadout(slot, i) {
+    const { game, analysis } = slot;
+    const value = game.cells[i];
+    let detail;
+    if (value !== HIDDEN) detail = `OPEN / ${value} ADJACENT`;
+    else if (game.state !== "playing") detail = game.isMine(i) ? "MINE" : "UNOPENED";
+    else if (slot.first || !analysis) detail = "OPENING IS ALWAYS SAFE";
+    else detail = `P(MINE) ${pct(analysis.probability[i], 2)}`;
+    setText("readout", `${tag(slot)}SECTOR ${coord(i)} / ${detail}`);
+  }
+  function renderNumbers() {
+    const slot = slots[focus];
+    const played = session.won + session.lost;
+    setText("k-win", played ? pct(session.won / played) : "--.-%");
+    setText("k-games", `${session.won}W / ${session.lost}L`);
+    setText("k-streak", `${session.streak} (BEST ${session.bestStreak})`);
+    setText("k-cleared", `${(slot.progress[slot.progress.length - 1] ?? 0).toFixed(1)}%`);
+    setText("k-guesses", String(slot.guesses));
+    setText("k-survival", pct(slot.survival));
+    const ms = session.times[session.times.length - 1];
+    setText("k-ms", ms === void 0 ? "--" : `${ms.toFixed(2)} MS`);
+    setText("focus-name", slots.length > 1 ? `FOCUS ${fieldName(slot)} / CLICK A FIELD TO SWITCH` : "LIVE");
+    const a = slot.lastAnalysis;
+    if (!a) return;
+    const s = a.stats;
+    setText("k-mines", `${a.mines.length} / ${config.mines}`);
+    setText("s-constraints", String(s.constraints));
+    setText("s-groups", String(s.groups));
+    setText("s-components", String(s.components));
+    setText("s-largest", `${s.largestComponent} CELLS`);
+    setText("s-border", String(s.borderCells));
+    setText("s-interior", String(s.interiorCells));
+    setText("s-nodes", s.nodes.toLocaleString("en-US"));
+    setText("s-layouts", Number.isFinite(s.log10Layouts) ? `10^${s.log10Layouts.toFixed(1)}` : "N/A");
+    setText("s-expected", s.expectedBorderMines.toFixed(2));
+    setText("s-mode", a.exact ? "EXACT" : "ESTIMATE");
+  }
+  function renderPanels() {
+    renderBanner();
+    renderNumbers();
+    renderCharts();
+  }
+  function canvas(id) {
+    const node = el(id);
+    let ctx = null;
+    try {
+      ctx = node.getContext("2d");
+    } catch {
+      return null;
+    }
+    if (!ctx) return null;
+    const dpr = window.devicePixelRatio || 1;
+    const w = node.clientWidth;
+    const h = node.clientHeight;
+    if (w === 0 || h === 0) return null;
+    if (node.width !== Math.round(w * dpr) || node.height !== Math.round(h * dpr)) {
+      node.width = Math.round(w * dpr);
+      node.height = Math.round(h * dpr);
+    }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    ctx.font = `10px ${FONT}`;
+    ctx.textBaseline = "middle";
+    return { ctx, w, h };
+  }
+  function awaiting(ctx, w, h) {
+    ctx.fillStyle = C.dim;
+    ctx.textAlign = "center";
+    ctx.fillText("AWAITING DATA", w / 2, h / 2);
+  }
+  function lineChart(id, data, opts = {}) {
+    const c = canvas(id);
+    if (!c) return;
+    const { ctx, w, h } = c;
+    const L = 36;
+    const R = 10;
+    const T = 8;
+    const B = 8;
+    const pw = w - L - R;
+    const ph = h - T - B;
+    const lo = opts.min ?? Math.min(0, ...data);
+    let hi = opts.max ?? Math.max(...data, 0);
+    if (!(hi - lo > 1e-9)) hi = lo + 1;
+    const color = opts.color ?? C.accent;
+    const y = (v) => T + ph * (1 - (Math.min(hi, Math.max(lo, v)) - lo) / (hi - lo));
+    ctx.lineWidth = 1;
+    ctx.textAlign = "right";
+    for (let i = 0; i <= 3; i++) {
+      const gy = T + ph * i / 3;
+      ctx.strokeStyle = C.grid;
+      ctx.beginPath();
+      ctx.moveTo(L, gy + 0.5);
+      ctx.lineTo(w - R, gy + 0.5);
+      ctx.stroke();
+      ctx.fillStyle = C.dim;
+      ctx.fillText((hi - (hi - lo) * i / 3).toFixed(opts.decimals ?? 0), L - 6, gy);
+    }
+    if (data.length < 2) {
+      awaiting(ctx, w, h);
+      return;
+    }
+    if (opts.ref !== void 0) {
+      ctx.strokeStyle = C.dim;
+      ctx.setLineDash([3, 4]);
+      ctx.beginPath();
+      ctx.moveTo(L, y(opts.ref));
+      ctx.lineTo(w - R, y(opts.ref));
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    const x = (i) => L + pw * i / (data.length - 1);
+    ctx.beginPath();
+    data.forEach((v, i) => i ? ctx.lineTo(x(i), y(v)) : ctx.moveTo(x(i), y(v)));
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.lineTo(x(data.length - 1), T + ph);
+    ctx.lineTo(L, T + ph);
+    ctx.closePath();
+    ctx.globalAlpha = 0.1;
+    ctx.fillStyle = color;
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = C.bright;
+    ctx.beginPath();
+    ctx.arc(x(data.length - 1), y(data[data.length - 1]), 2.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  function barChart(id, values, labels, opts = {}) {
+    const c = canvas(id);
+    if (!c) return;
+    const { ctx, w, h } = c;
+    const L = 8;
+    const R = 8;
+    const T = 16;
+    const B = 16;
+    const pw = w - L - R;
+    const ph = h - T - B;
+    const n = values.length;
+    if (n === 0 || values.every((v) => v === 0) && !(opts.outline ?? []).some((v) => v > 0)) {
+      awaiting(ctx, w, h);
+      return;
+    }
+    const max = opts.max ?? Math.max(...values, ...opts.outline ?? [], 1e-9);
+    const gap = Math.max(2, Math.min(6, pw / n / 4));
+    const bw = (pw - gap * (n - 1)) / n;
+    ctx.strokeStyle = C.line;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(L, T + ph + 0.5);
+    ctx.lineTo(w - R, T + ph + 0.5);
+    ctx.stroke();
+    ctx.textAlign = "center";
+    for (let i = 0; i < n; i++) {
+      const x = L + i * (bw + gap);
+      const bh = ph * Math.min(values[i], max) / max;
+      ctx.fillStyle = opts.color ? opts.color(i) : C.accent;
+      ctx.fillRect(x, T + ph - bh, bw, bh);
+      if (opts.outline) {
+        const oh = ph * Math.min(opts.outline[i], max) / max;
+        ctx.strokeStyle = C.bright;
+        ctx.strokeRect(x + 0.5, T + ph - oh + 0.5, bw - 1, oh);
+      }
+      ctx.fillStyle = C.dim;
+      ctx.fillText(labels[i], x + bw / 2, T + ph + 9);
+      if (opts.format && values[i] > 0 && bw >= 18) {
+        ctx.fillStyle = C.text;
+        ctx.fillText(opts.format(values[i]), x + bw / 2, T + ph - bh - 7);
+      }
+    }
+  }
+  function gauge(id, value, label) {
+    const c = canvas(id);
+    if (!c) return;
+    const { ctx, w, h } = c;
+    const cx = w / 2;
+    const cy = h - 16;
+    const r = Math.max(10, Math.min(w / 2 - 14, h - 30));
+    ctx.lineWidth = 8;
+    ctx.strokeStyle = C.grid;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, Math.PI, Math.PI * 2);
+    ctx.stroke();
+    if (value !== null && value > 0) {
+      ctx.strokeStyle = C.red;
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, Math.PI, Math.PI * (1 + Math.min(1, value)));
+      ctx.stroke();
+    }
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = C.dim;
+    for (let i = 0; i <= 10; i++) {
+      const a = Math.PI * (1 + i / 10);
+      const inner = r + 7;
+      const outer = r + (i % 5 === 0 ? 13 : 10);
+      ctx.beginPath();
+      ctx.moveTo(cx + Math.cos(a) * inner, cy + Math.sin(a) * inner);
+      ctx.lineTo(cx + Math.cos(a) * outer, cy + Math.sin(a) * outer);
+      ctx.stroke();
+    }
+    ctx.textAlign = "center";
+    ctx.fillStyle = value !== null && value > 0 ? C.red : C.accent;
+    ctx.font = `700 22px ${FONT}`;
+    ctx.fillText(value === null ? "--" : pct(value), cx, cy - r * 0.38);
+    ctx.font = `10px ${FONT}`;
+    ctx.fillStyle = C.dim;
+    ctx.fillText(label, cx, cy - 2);
+  }
+  function componentMap(id) {
+    const c = canvas(id);
+    if (!c) return;
+    const { ctx, w, h } = c;
+    const slot = slots[focus];
+    const a = slot.lastAnalysis;
+    const cells = slot.game.cells;
+    const size = Math.max(1, Math.floor(Math.min(w / config.width, h / config.height)));
+    const ox = Math.floor((w - size * config.width) / 2);
+    const oy = Math.floor((h - size * config.height) / 2);
+    for (let i = 0; i < cells.length; i++) {
+      const x = ox + i % config.width * size;
+      const y = oy + Math.floor(i / config.width) * size;
+      if (cells[i] !== HIDDEN) ctx.fillStyle = "#0b0c0c";
+      else if (!a || slot.first) ctx.fillStyle = C.grid;
+      else if (a.probability[i] === 1) ctx.fillStyle = C.red;
+      else if (a.component[i] >= 0) ctx.fillStyle = COMPONENT_SHADES[a.component[i] % COMPONENT_SHADES.length];
+      else ctx.fillStyle = C.line;
+      ctx.fillRect(x, y, size - 1, size - 1);
+    }
+  }
+  function renderCharts() {
+    const slot = slots[focus];
+    const { game, analysis, planned } = slot;
+    const a = slot.lastAnalysis;
+    const live = analysis !== null && !slot.first;
+    if (!live) gauge("c-gauge", null, game.state === "playing" ? "STANDBY" : "FIELD CLOSED");
+    else gauge("c-gauge", planned.risk, "NEXT MOVE RISK");
+    componentMap("c-map");
+    lineChart("c-win", session.winSeries, { min: 0, max: 100, ref: 50 });
+    lineChart("c-time", session.times, { min: 0, decimals: 1, color: C.text });
+    lineChart("c-progress", slot.progress, { min: 0, max: 100 });
+    const riskLabels = ["SAFE", "<10", "<20", "<30", "<40", "<50", "50+", "MINE"];
+    const risk = new Array(8).fill(0);
+    if (live) {
+      for (let i = 0; i < game.cells.length; i++) {
+        if (game.cells[i] !== HIDDEN) continue;
+        const p = analysis.probability[i];
+        if (p === 0) risk[0]++;
+        else if (p === 1) risk[7]++;
+        else risk[1 + Math.min(5, Math.floor(p * 10))]++;
+      }
+    }
+    const redraw = live || slot.first;
+    if (redraw) {
+      barChart("c-risk", risk, riskLabels, {
+        color: (i) => i === 0 ? C.accent : i >= 6 ? C.red : C.dim,
+        format: (v) => String(v)
+      });
+    }
+    const dist = live && a ? a.stats.borderMines : [];
+    let from = dist.findIndex((p) => p > 2e-3);
+    let to = dist.length - 1;
+    while (to > from && dist[to] <= 2e-3) to--;
+    if (from === -1) from = to + 1;
+    const slice = dist.slice(from, to + 1);
+    if (redraw) {
+      barChart(
+        "c-border",
+        slice,
+        slice.map((_, i) => String(from + i)),
+        { color: () => C.text }
+      );
+    }
+    const buckets = session.calibration;
+    barChart(
+      "c-calib",
+      buckets.map((b) => b.n ? b.deaths / b.n : 0),
+      ["0-10", "10-20", "20-30", "30-40", "40+"],
+      {
+        max: 0.6,
+        color: () => C.red,
+        outline: buckets.map((b) => b.n ? b.risk / b.n : 0),
+        format: (v) => `${Math.round(v * 100)}`
+      }
+    );
+    const guesses = buckets.reduce((sum, b) => sum + b.n, 0);
+    setText("calib-n", `${guesses} GUESSES`);
+    const numbers = new Array(9).fill(0);
+    for (let i = 0; i < game.cells.length; i++) if (game.cells[i] >= 0) numbers[game.cells[i]]++;
+    barChart("c-nums", numbers, ["0", "1", "2", "3", "4", "5", "6", "7", "8"], {
+      color: (i) => i === 0 ? C.line : C.accent
+    });
+  }
+  function tick() {
+    if (!auto) return;
+    advanceAll(false);
+    timer = window.setTimeout(tick, delay);
+  }
+  function setAuto(on) {
+    auto = on;
+    window.clearTimeout(timer);
+    const button = el("auto");
+    button.textContent = on ? "PAUSE" : "AUTO";
+    button.setAttribute("aria-pressed", String(on));
+    setText("mode", on ? "AUTONOMOUS" : "MANUAL");
+    if (on) timer = window.setTimeout(tick, delay);
+  }
+  el("new").addEventListener("click", () => {
+    slots.forEach(newGame);
+    renderPanels();
+  });
+  el("step").addEventListener("click", () => {
+    setAuto(false);
+    advanceAll(true);
+  });
+  el("auto").addEventListener("click", () => setAuto(!auto));
+  el("sim").addEventListener("click", () => {
+    const button = el("sim");
+    button.disabled = true;
+    button.textContent = "RUNNING";
+    window.setTimeout(() => {
+      simulate(100);
+      button.disabled = false;
+      button.textContent = "SIM +100";
+    }, 30);
+  });
+  el("level").addEventListener("change", (event) => {
+    config = LEVELS[event.target.value];
+    resetSession();
+    log("DIFFICULTY CHANGED / SESSION STATS RESET", "warn");
+    buildFields(slots.length);
+  });
+  el("count").addEventListener("change", (event) => {
+    buildFields(Number(event.target.value));
+  });
+  el("speed").addEventListener("input", (event) => {
+    delay = Number(event.target.value);
+    setText("speed-value", `${delay} MS`);
+  });
+  window.addEventListener("resize", renderCharts);
+  window.setInterval(() => setText("clock", `T+${elapsed()}`), 1e3);
+  var check = (id) => el(id);
+  var PRESETS = {
+    optimal: { policy: OPTIMAL, engine: "exact" },
+    nofreebies: { policy: { ...OPTIMAL, takeSafe: false }, engine: "exact" },
+    daredevil: { policy: { ...OPTIMAL, takeSafe: false, minRisk: 0.25 }, engine: "exact" },
+    coinflip: { policy: { ...OPTIMAL, pick: "random", tieBreak: "random", opening: "random" }, engine: "exact" },
+    sloppy: { policy: { ...OPTIMAL, blunder: 0.08 }, engine: "exact" },
+    gutfeel: { policy: OPTIMAL, engine: "estimate" },
+    kamikaze: { policy: { ...OPTIMAL, pick: "riskiest", avoidMines: false }, engine: "exact" }
+  };
+  function showSettings() {
+    check("p-safe").checked = policy.takeSafe;
+    check("p-mines").checked = policy.avoidMines;
+    check("p-batch").checked = policy.batchSafe;
+    check("p-min").value = String(Math.round(policy.minRisk * 100));
+    check("p-max").value = String(Math.round(policy.maxRisk * 100));
+    check("p-blunder").value = String(Math.round(policy.blunder * 100));
+    el("p-pick").value = policy.pick;
+    el("p-tie").value = policy.tieBreak;
+    el("p-open").value = policy.opening;
+    el("p-engine").value = engine;
+    describeSettings();
+  }
+  function describeSettings() {
+    const lo = Math.round(policy.minRisk * 100);
+    const hi = Math.round(policy.maxRisk * 100);
+    setText("p-min-v", `${lo}%`);
+    setText("p-max-v", `${hi}%`);
+    setText("p-blunder-v", `${Math.round(policy.blunder * 100)}%`);
+    const bar = el("p-window");
+    bar.style.left = `${lo}%`;
+    bar.style.width = `${Math.max(1, hi - lo)}%`;
+    const pick = { safest: "THE LOWEST-RISK", riskiest: "THE HIGHEST-RISK", random: "A RANDOM" }[policy.pick];
+    const parts = [`CLICKS ${pick} CELL WITH RISK BETWEEN ${lo}% AND ${hi}%.`];
+    parts.push(policy.takeSafe ? "TAKES GUARANTEED-SAFE CELLS." : "REFUSES GUARANTEED-SAFE CELLS.");
+    if (!policy.avoidMines) parts.push("WILL CLICK CELLS IT KNOWS ARE MINES.");
+    if (policy.blunder > 0) parts.push(`MISCLICKS ${Math.round(policy.blunder * 100)}% OF THE TIME.`);
+    parts.push(engine === "exact" ? "ODDS ARE EXACT." : "ODDS ARE ROUGH ESTIMATES.");
+    parts.push("IF NOTHING FITS, IT CLICKS THE NEAREST CELL TO THE WINDOW.");
+    setText("p-summary", parts.join(" "));
+    const match = Object.entries(PRESETS).find(
+      ([, preset]) => preset.engine === engine && JSON.stringify(preset.policy) === JSON.stringify(policy)
+    );
+    document.querySelectorAll("[data-preset]").forEach((button) => {
+      button.setAttribute("aria-pressed", String(button.dataset.preset === match?.[0]));
+    });
+  }
+  function settingsChanged(message) {
+    describeSettings();
+    resetSession();
+    log(`${message} / SESSION STATS RESET`, "warn");
+    for (const slot of slots) refreshSlot(slot, false);
+    renderPanels();
+  }
+  function readSettings(changed) {
+    let lo = Number(check("p-min").value);
+    let hi = Number(check("p-max").value);
+    if (lo > hi) {
+      if (changed === "p-min") hi = lo;
+      else lo = hi;
+      check("p-min").value = String(lo);
+      check("p-max").value = String(hi);
+    }
+    policy = {
+      takeSafe: check("p-safe").checked,
+      avoidMines: check("p-mines").checked,
+      batchSafe: check("p-batch").checked,
+      minRisk: lo / 100,
+      maxRisk: hi / 100,
+      blunder: Number(check("p-blunder").value) / 100,
+      pick: el("p-pick").value,
+      tieBreak: el("p-tie").value,
+      opening: el("p-open").value
+    };
+    engine = el("p-engine").value;
+  }
+  for (const id of ["p-safe", "p-mines", "p-batch", "p-min", "p-max", "p-blunder", "p-pick", "p-tie", "p-open", "p-engine"]) {
+    el(id).addEventListener("input", () => {
+      readSettings(id);
+      describeSettings();
+    });
+    el(id).addEventListener("change", () => {
+      readSettings(id);
+      settingsChanged("SOLVER SETTINGS CHANGED");
+    });
+  }
+  document.querySelectorAll("[data-preset]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const preset = PRESETS[button.dataset.preset];
+      policy = { ...preset.policy };
+      engine = preset.engine;
+      showSettings();
+      settingsChanged(`PRESET ${button.textContent}`);
+    });
+  });
+  check("d-heat").addEventListener("change", (event) => {
+    display.heat = event.target.checked;
+    slots.forEach(renderSlot);
+  });
+  function setOdds(on) {
+    display.odds = on;
+    check("d-odds").checked = on;
+    const button = el("odds");
+    button.textContent = on ? "% ON" : "% OFF";
+    button.setAttribute("aria-pressed", String(on));
+    slots.forEach(renderSlot);
+  }
+  check("d-odds").addEventListener("change", (event) => setOdds(event.target.checked));
+  el("odds").addEventListener("click", () => setOdds(!display.odds));
+  el("reset").addEventListener("click", () => {
+    resetSession();
+    log("SESSION STATS RESET", "warn");
+    renderPanels();
+  });
+  resetSession();
+  buildFields(1);
+  showSettings();
+  setAuto(true);
+})();
+</script>
+</body>
+</html>
