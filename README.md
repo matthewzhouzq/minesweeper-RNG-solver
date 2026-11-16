@@ -1,4 +1,4 @@
-# minesweeper-solver
+# minesweeper-RNG-solver
 
 A Minesweeper solver that computes the **exact** probability that each hidden cell is a mine, then plays the safest move. TypeScript, no runtime dependencies.
 
